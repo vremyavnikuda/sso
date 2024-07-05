@@ -7,6 +7,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"log/slog"
 	"sso/internal/domain/models"
+	"sso/internal/lib/jwt"
 	"sso/internal/lib/logger/sl"
 	"sso/storage"
 	"time"
@@ -66,6 +67,8 @@ func New(
 
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrInvalidAppID       = errors.New("invalid app id")
+	ErrUserExists         = errors.New("user already exists")
 )
 
 // Login аутентифицирует пользователя на основе предоставленных учетных данных.
@@ -116,6 +119,13 @@ func (a *Auth) Login(
 	}
 	log.Info("successfully logged in")
 
+	token, err := jwt.NewToken(user, app, a.toketTTL)
+	if err != nil {
+		a.log.Error("failed to generate token", sl.Err(err))
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+	return token, nil
+
 }
 
 // RegisterNewUser регистрирует нового пользователя с указанным адресом электронной почты и паролем.
@@ -147,6 +157,11 @@ func (a *Auth) RegisterNewUser(ctx context.Context, email string, pass string) (
 	id, err := a.usrSaver.SaveUser(ctx, email, passHash)
 
 	if err != nil {
+		if errors.Is(err, storage.ErrUserExists) {
+			log.Warn("failed to find user", sl.Err(err))
+
+			return 0, fmt.Errorf("%s: %w", op, ErrUserExists)
+		}
 		log.Error("Failed to save user", "error", sl.Err(err))
 		return 0, fmt.Errorf("%s: %w", op, err)
 	}
@@ -156,5 +171,23 @@ func (a *Auth) RegisterNewUser(ctx context.Context, email string, pass string) (
 
 // IsAdmin check if user is admin
 func (a *Auth) IsAdmin(ctx context.Context, userID int64) (bool, error) {
-	panic("implement me")
+	const op = "auth.IsAdmin"
+
+	log := a.log.With(
+		slog.String("op", op),
+		slog.Int64("userID", userID),
+	)
+
+	log.Info("checking if user is admin")
+
+	isAdmin, err := a.usrProvider.IsAdmin(ctx, userID)
+	if err != nil {
+		if errors.Is(err, storage.ErrAppNotFound) {
+			a.log.Warn("failed to find user", sl.Err(err))
+			return false, fmt.Errorf("%s: %w", op, ErrInvalidAppID)
+		}
+		return false, fmt.Errorf("%s: %w", op, err)
+	}
+	log.Info("checking if user is admin", slog.Bool("isAdmin", isAdmin))
+	return isAdmin, nil
 }
